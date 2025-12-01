@@ -145,12 +145,19 @@ def normalize_key(prefix: str, filename: str) -> str:
     return f"{sanitized}/{base}" if sanitized else base
 
 
-def list_objects(client, bucket: str, prefix: str, recursive: bool, max_items: int) -> List[dict]:
+def list_objects(
+    client,
+    bucket: str,
+    prefix: str,
+    recursive: bool,
+    max_items: int,
+) -> tuple[List[str], List[dict]]:
     paginator = client.get_paginator("list_objects_v2")
     kwargs = {"Bucket": bucket, "Prefix": prefix}
     if not recursive:
         kwargs["Delimiter"] = "/"
 
+    directories: List[str] = []
     objects: List[dict] = []
     for page in paginator.paginate(**kwargs, PaginationConfig={"MaxItems": max_items}):
         for obj in page.get("Contents", []):
@@ -159,9 +166,12 @@ def list_objects(client, bucket: str, prefix: str, recursive: bool, max_items: i
                 "Size": obj["Size"],
                 "LastModified": obj["LastModified"],
             })
+        if not recursive:
+            for entry in page.get("CommonPrefixes", []) or []:
+                directories.append(entry.get("Prefix", ""))
         if len(objects) >= max_items:
             break
-    return objects
+    return sorted(set(directories)), objects
 
 
 def show_error(exc: Exception):
@@ -186,19 +196,31 @@ def browse_tab(client, settings: ConnectionSettings):
     if submitted:
         try:
             with st.spinner("Listing objects..."):
-                objects = list_objects(client, settings.bucket, prefix, recursive, max_items)
-            st.session_state["last_listing"] = objects
+                dirs, objects = list_objects(client, settings.bucket, prefix, recursive, max_items)
+            st.session_state["last_listing"] = {
+                "dirs": dirs,
+                "objects": objects,
+                "prefix": prefix,
+                "recursive": recursive,
+            }
         except (BotoCoreError, ClientError) as exc:
             show_error(exc)
             return
 
-    objects = st.session_state.get("last_listing", [])
-    if not objects:
+    listing = st.session_state.get("last_listing", {})
+    dirs = listing.get("dirs", [])
+    objects = listing.get("objects", [])
+    if not dirs and not objects:
         st.info("Run a listing to populate this table.")
         return
 
-    st.success(f"Showing {len(objects)} object(s) from {settings.bucket}")
-    st.dataframe(objects, use_container_width=True)
+    if dirs:
+        st.success(f"Subdirectories under '{listing.get('prefix', prefix)}'")
+        st.dataframe({"Prefix": dirs}, width='stretch')
+
+    if objects:
+        st.success(f"Objects ({len(objects)}) in {settings.bucket}")
+        st.dataframe(objects, width='stretch')
 
 
 def upload_small_files(client, settings: ConnectionSettings, files: Iterable[io.BytesIO], prefix: str):
@@ -209,21 +231,14 @@ def upload_small_files(client, settings: ConnectionSettings, files: Iterable[io.
         total_bytes = len(data.getbuffer())
         data.seek(0)
 
-        progress = st.progress(0.0, text=f"Uploading {key}")
-        uploaded = 0
-
-        def callback(chunk: int):
-            nonlocal uploaded
-            uploaded += chunk
-            progress.progress(min(uploaded / total_bytes, 1.0), text=f"Uploading {key}")
-
-        try:
-            client.upload_fileobj(data, settings.bucket, key, Callback=callback)
-            progress.progress(1.0, text=f"Uploaded {key}")
-            st.success(f"Uploaded {key} ({total_bytes / (1024 ** 2):.2f} MB)")
-        except (BotoCoreError, ClientError) as exc:
-            progress.empty()
-            show_error(exc)
+        # Note: Progress callbacks don't work with Streamlit due to threading issues
+        # (boto3/s3transfer runs callbacks from background threads)
+        with st.spinner(f"Uploading {key} ({total_bytes / (1024 ** 2):.2f} MB)..."):
+            try:
+                client.upload_fileobj(data, settings.bucket, key)
+                st.success(f"Uploaded {key} ({total_bytes / (1024 ** 2):.2f} MB)")
+            except (BotoCoreError, ClientError) as exc:
+                show_error(exc)
 
 
 def upload_large_file(settings: ConnectionSettings, local_path: str, remote_key: str, chunk_size: int):
@@ -283,7 +298,8 @@ def upload_tab(client, settings: ConnectionSettings):
 
 def download_tab(client, settings: ConnectionSettings):
     st.subheader("Download files")
-    cached_objects = st.session_state.get("last_listing", [])
+    listing = st.session_state.get("last_listing", {})
+    cached_objects = listing.get("objects", [])
     options = [obj["Key"] for obj in cached_objects]
 
     key = st.selectbox(
@@ -311,21 +327,14 @@ def download_tab(client, settings: ConnectionSettings):
         show_error(exc)
         return
 
-    progress = st.progress(0.0, text=f"Downloading {target_key}")
-    downloaded = 0
-
-    def callback(chunk: int):
-        nonlocal downloaded
-        downloaded += chunk
-        progress.progress(min(downloaded / total_bytes if total_bytes else 0, 1.0), text=f"Downloading {target_key}")
-
-    try:
-        client.download_file(settings.bucket, target_key, destination, Callback=callback)
-        progress.progress(1.0, text=f"Downloaded {target_key}")
-        st.success(f"Saved to {destination}")
-    except (BotoCoreError, ClientError) as exc:
-        progress.empty()
-        show_error(exc)
+    # Note: Progress callbacks don't work with Streamlit due to threading issues
+    # (boto3/s3transfer runs callbacks from background threads)
+    with st.spinner(f"Downloading {target_key} ({total_bytes / (1024 ** 2):.2f} MB)..."):
+        try:
+            client.download_file(settings.bucket, target_key, destination)
+            st.success(f"Saved to {destination}")
+        except (BotoCoreError, ClientError) as exc:
+            show_error(exc)
 
 
 def main():
