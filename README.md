@@ -33,7 +33,7 @@ A local Streamlit application that lists, uploads, and downloads files in a RunP
 | Tab | Capabilities |
 | --- | ------------ |
 | **Browse** | Paginated listings with prefix filters, optional recursion, and cached results for quick reuse. |
-| **Upload** | Drag-and-drop uploader for browser files plus a multipart mode that streams large local paths through [`LargeMultipartUploader.upload()`](upload_large_file.py:379). |
+| **Upload** | Single drag-and-drop surface that auto-routes each file: inline uploads for small items, multipart streaming (via [`LargeMultipartUploader.upload()`](upload_large_file.py:379)) for large selections. |
 | **Download** | One-click downloads for any key returned by the last listing or a manual object path, with progress indicators and destination overrides. |
 
 The app surfaces RunPod-specific HTTP errors (507 insufficient storage, 524 proxy timeouts, etc.) described in [`docs/S3-compatible-API.md`](docs/S3-compatible-API.md:170-228) and automatically invalidates cached listings after successful uploads.
@@ -42,7 +42,7 @@ The app surfaces RunPod-specific HTTP errors (507 insufficient storage, 524 prox
 
 1. **Connectivity** – Use the Browse tab to list a small prefix and confirm the bucket/endpoint pairing is correct.
 2. **Standard upload** – Drag a small (<200 MB) file into the Upload tab and verify it appears in Browse after refreshing.
-3. **Multipart upload** – Toggle "Use local path + multipart helper" and point at a multi-GB file; watch the console logs produced by [`upload_large_file.py`](upload_large_file.py:379-475) for part-by-part updates.
+3. **Multipart upload** – Drag a multi-GB file; the app will automatically spool it to a temporary file and stream it via [`upload_large_file.py`](upload_large_file.py:379-475).
 4. **Download** – Select any listed key, set a destination path, and confirm the file arrives locally.
 
 For exceptionally large directories, refer back to RunPod's operational notes in [`docs/S3-compatible-API.md`](docs/S3-compatible-API.md:454-536) regarding pagination and timeout tuning.

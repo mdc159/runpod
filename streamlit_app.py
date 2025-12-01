@@ -4,6 +4,8 @@ from __future__ import annotations
 import io
 import logging
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
@@ -223,22 +225,51 @@ def browse_tab(client, settings: ConnectionSettings):
         st.dataframe(objects, width='stretch')
 
 
-def upload_small_files(client, settings: ConnectionSettings, files: Iterable[io.BytesIO], prefix: str):
+INLINE_UPLOAD_LIMIT_MB = 200
+
+
+def upload_uploaded_files(
+    client,
+    settings: ConnectionSettings,
+    files: Iterable[io.BytesIO],
+    prefix: str,
+    chunk_size_mb: int,
+    force_multipart: bool,
+):
     for file_obj in files:
         filename = getattr(file_obj, "name", "uploaded_file")
         key = normalize_key(prefix, filename)
-        data = io.BytesIO(file_obj.read())
-        total_bytes = len(data.getbuffer())
-        data.seek(0)
+        size_mb = getattr(file_obj, "size", 0) / float(1024 ** 2)
+        use_multipart = force_multipart or size_mb > INLINE_UPLOAD_LIMIT_MB
 
-        # Note: Progress callbacks don't work with Streamlit due to threading issues
-        # (boto3/s3transfer runs callbacks from background threads)
-        with st.spinner(f"Uploading {key} ({total_bytes / (1024 ** 2):.2f} MB)..."):
+        if not use_multipart:
+            file_obj.seek(0)
+            data = io.BytesIO(file_obj.read())
+            total_bytes = len(data.getbuffer())
+            data.seek(0)
+            with st.spinner(f"Uploading {key} ({total_bytes / (1024 ** 2):.2f} MB)..."):
+                try:
+                    client.upload_fileobj(data, settings.bucket, key)
+                    st.success(f"Uploaded {key} ({total_bytes / (1024 ** 2):.2f} MB)")
+                except (BotoCoreError, ClientError) as exc:
+                    show_error(exc)
+            continue
+
+        if LargeMultipartUploader is None:
+            st.error("upload_large_file.py is missing; cannot perform multipart uploads.")
+            return
+
+        file_obj.seek(0)
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            shutil.copyfileobj(file_obj, tmp)
+            temp_path = tmp.name
+        try:
+            upload_large_file(settings, temp_path, key, chunk_size_mb * 1024 * 1024)
+        finally:
             try:
-                client.upload_fileobj(data, settings.bucket, key)
-                st.success(f"Uploaded {key} ({total_bytes / (1024 ** 2):.2f} MB)")
-            except (BotoCoreError, ClientError) as exc:
-                show_error(exc)
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 def upload_large_file(settings: ConnectionSettings, local_path: str, remote_key: str, chunk_size: int):
@@ -263,37 +294,30 @@ def upload_large_file(settings: ConnectionSettings, local_path: str, remote_key:
 
 def upload_tab(client, settings: ConnectionSettings):
     st.subheader("Upload files")
-    st.write("Use the quick uploader for browser-selected files or switch to local-path multipart mode for files >10GB.")
+    st.write(
+        "Drag-and-drop any files. The app automatically switches to multipart uploads once a file exceeds"
+        " the inline threshold, so you never have to retype local paths."
+    )
 
     with st.form("upload_form"):
-        files = st.file_uploader("Select files", accept_multiple_files=True)
+        files = st.file_uploader(
+            "Browse files",
+            accept_multiple_files=True,
+            help="The server max upload size has been raised (~5GB), but very large files will stream via multipart.",
+        )
         prefix = st.text_input("Remote folder (optional)")
-        use_multipart = st.checkbox("Use local path + multipart helper", value=False)
-        local_path = st.text_input("Local file path", placeholder="/path/to/large/file", disabled=not use_multipart)
-        remote_name = st.text_input("Remote filename (leave blank to keep original)")
-        chunk_size_mb = st.slider("Multipart chunk size (MB)", min_value=5, max_value=500, value=50, disabled=not use_multipart)
+        force_multipart = st.checkbox("Force multipart for all drag-and-drop files", value=False)
+        chunk_size_mb = st.slider("Multipart chunk size (MB)", min_value=5, max_value=500, value=50)
         submit = st.form_submit_button("Start upload")
 
     if not submit:
         return
 
-    if use_multipart:
-        if not local_path:
-            st.error("Provide a local path for multipart uploads.")
-            return
-        upload_target = remote_name or Path(local_path).name
-        key = normalize_key(prefix, upload_target)
-        try:
-            upload_large_file(settings, local_path, key, chunk_size_mb * 1024 * 1024)
-        except Exception as exc:  # noqa: BLE001 - surface all errors to the UI
-            show_error(exc)
-        return
-
     if not files:
-        st.error("Select at least one file for the standard uploader.")
+        st.error("Select at least one file to upload.")
         return
 
-    upload_small_files(client, settings, files, prefix)
+    upload_uploaded_files(client, settings, files, prefix, chunk_size_mb, force_multipart)
 
 
 def download_tab(client, settings: ConnectionSettings):
