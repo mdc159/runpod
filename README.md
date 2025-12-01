@@ -1,143 +1,48 @@
-# RunPod Multi-Connection Guide
+# RunPod Streamlit Transfer Console
 
-This project helps you connect to RunPod using multiple methods based on your `.env` file credentials.
+A local Streamlit application that lists, uploads, and downloads files in a RunPod network volume via the S3-compatible API. It wraps the official [`upload_large_file.py`](upload_large_file.py:1) helper for resilient multipart uploads and exposes a friendlier UI for daily workflows.
 
-## 🚀 Quick Start
+## Prerequisites
 
-1. **Install dependencies:**
+1. **Python 3.11+**
+2. **uv** for dependency management (per repo guidelines)
+3. RunPod S3 credentials (access key, secret, network volume ID, and datacenter endpoint)
+
+## Setup
+
+1. Copy the provided example environment file and populate it with your RunPod secrets:
    ```bash
-   pip install -r requirements.txt
+   cp .env.example .env
+   # edit .env with your values
    ```
 
-2. **Your credentials are already set up!**
-   The project automatically reads from your `.env` file which contains:
-   - ✅ S3 Storage credentials (for file storage)
-   - ✅ SSH connection details (for direct server access)
-
-3. **Test your connections:**
+2. Install dependencies with `uv`:
    ```bash
-   python runpod_connections.py
+   uv pip install -r requirements.txt
    ```
 
-## 📁 Available Connection Methods
+3. Launch the Streamlit UI:
+   ```bash
+   streamlit run streamlit_app.py
+   ```
 
-### 1. S3 Storage Connection
-- **Purpose**: Store and retrieve files from RunPod's S3-compatible storage
-- **Credentials**: AWS access keys and bucket info from your `.env` file
-- **Use cases**: Model storage, dataset management, result storage
+4. In the sidebar, confirm the pre-populated credentials (sourced from `.env`) and click **Connect**. The main tabs will unlock once a client is created.
 
-### 2. SSH Connection
-- **Purpose**: Direct access to your RunPod server
-- **Credentials**: SSH host and authentication from your `.env` file
-- **Use cases**: Running commands, file transfers, real-time interaction
+## Features
 
-## 🔧 Usage Examples
+| Tab | Capabilities |
+| --- | ------------ |
+| **Browse** | Paginated listings with prefix filters, optional recursion, and cached results for quick reuse. |
+| **Upload** | Drag-and-drop uploader for browser files plus a multipart mode that streams large local paths through [`LargeMultipartUploader.upload()`](upload_large_file.py:379). |
+| **Download** | One-click downloads for any key returned by the last listing or a manual object path, with progress indicators and destination overrides. |
 
-### S3 Operations
-```python
-from runpod_connections import RunPodConnections
+The app surfaces RunPod-specific HTTP errors (507 insufficient storage, 524 proxy timeouts, etc.) described in [`docs/S3-compatible-API.md`](docs/S3-compatible-API.md:170-228) and automatically invalidates cached listings after successful uploads.
 
-runpod = RunPodConnections()
+## Testing checklist
 
-# List files in your S3 bucket
-files = runpod.list_s3_files()
-print(f"Found {len(files)} files")
+1. **Connectivity** – Use the Browse tab to list a small prefix and confirm the bucket/endpoint pairing is correct.
+2. **Standard upload** – Drag a small (<200 MB) file into the Upload tab and verify it appears in Browse after refreshing.
+3. **Multipart upload** – Toggle "Use local path + multipart helper" and point at a multi-GB file; watch the console logs produced by [`upload_large_file.py`](upload_large_file.py:379-475) for part-by-part updates.
+4. **Download** – Select any listed key, set a destination path, and confirm the file arrives locally.
 
-# Upload a file
-runpod.upload_to_s3("local_file.txt", "remote_file.txt")
-
-# Download a file
-runpod.download_from_s3("remote_file.txt", "downloaded_file.txt")
-```
-
-### SSH Operations
-```python
-# Connect to your RunPod server
-if runpod.ssh_connect():
-    # Execute commands
-    output, error = runpod.ssh_execute("nvidia-smi")
-    print(f"GPU Status: {output}")
-    
-    # Upload files
-    runpod.ssh_upload_file("local_file.txt", "/workspace/remote_file.txt")
-    
-    # Download files
-    runpod.ssh_download_file("/workspace/remote_file.txt", "downloaded_file.txt")
-    
-    runpod.close_ssh()
-```
-
-### Combined Workflow
-```python
-# 1. Download model from S3
-runpod.download_from_s3("models/my_model.pt", "local_model.pt")
-
-# 2. Upload to RunPod server
-runpod.ssh_connect()
-runpod.ssh_upload_file("local_model.pt", "/workspace/model.pt")
-
-# 3. Run inference
-output, error = runpod.ssh_execute("python inference.py")
-
-# 4. Save results back to S3
-runpod.ssh_download_file("/workspace/results.txt", "results.txt")
-runpod.upload_to_s3("results.txt", "results/inference_results.txt")
-```
-
-## 📊 Your Current Setup
-
-Based on your `.env` file, you have:
-
-- **S3 Bucket**: `qb32g9o3oa`
-- **S3 Endpoint**: `https://s3api-us-ca-2.runpod.io`
-- **SSH Host**: `ssh.runpod.io`
-- **SSH User**: `im5qj03lqzxugv-64410c77`
-- **Direct IP**: `149.36.1.233:40082`
-
-## 🛠️ Files
-
-- `runpod_connections.py` - Main multi-connection client
-- `runpod_examples.py` - Usage examples and demos
-- `runpod_config.py` - API configuration (for future use)
-- `runpod_client.py` - API client (for future use)
-- `requirements.txt` - Python dependencies
-- `README.md` - This guide
-
-## 🚀 Quick Commands
-
-```bash
-# Test all connections
-python runpod_connections.py
-
-# Run examples
-python runpod_examples.py
-
-# Test S3 operations
-python -c "from runpod_connections import RunPodConnections; r=RunPodConnections(); print('Files:', len(r.list_s3_files()))"
-
-# Test SSH connection
-python -c "from runpod_connections import RunPodConnections; r=RunPodConnections(); print('SSH:', r.ssh_connect())"
-```
-
-## 🔧 Troubleshooting
-
-1. **SSH Connection Issues**
-   - Make sure your SSH key is at `~/.ssh/id_ed25519`
-   - Check that your RunPod instance is running
-   - Verify the SSH host and port are correct
-
-2. **S3 Connection Issues**
-   - Verify your AWS credentials in the `.env` file
-   - Check that the bucket name and endpoint URL are correct
-   - Ensure your RunPod instance has S3 access enabled
-
-3. **Permission Issues**
-   - Make sure your SSH key has the correct permissions: `chmod 600 ~/.ssh/id_ed25519`
-   - Verify your S3 credentials have the necessary permissions
-
-## 📚 Additional Resources
-
-- [RunPod Documentation](https://docs.runpod.io/)
-- [RunPod Console](https://console.runpod.io/)
-- [S3 API Documentation](https://docs.aws.amazon.com/s3/)
-- [SSH Key Management](https://docs.runpod.io/docs/ssh-keys)
+For exceptionally large directories, refer back to RunPod's operational notes in [`docs/S3-compatible-API.md`](docs/S3-compatible-API.md:454-536) regarding pagination and timeout tuning.
