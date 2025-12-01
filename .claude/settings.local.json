@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Read(//c/Users/default.DESKTOP-A36S57H/.ssh/**)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(ssh:*)",
+      "Bash(ssh-keygen:*)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \"x:/GitHub/runpod/cleanup.ps1\")",
+      "Bash(test:*)",
+      "Bash(python3:*)",
+      "Bash(git check-ignore:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
